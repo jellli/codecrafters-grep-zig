@@ -5,12 +5,22 @@ fn matchPattern(input_line: []const u8, pattern: []const u8) bool {
         return std.mem.indexOf(u8, input_line, pattern) != null;
     }
     for (pattern, 0..) |symbol, index| {
-        if (symbol == '\\' and index + 1 < pattern.len and pattern[index + 1] == 'd') {
-            for (input_line) |char| {
-                switch (char) {
-                    '0'...'9' => return true,
-                    else => {},
-                }
+        if (symbol == '\\' and index + 1 < pattern.len) {
+            switch (pattern[index + 1]) {
+                'd' => {
+                    for (input_line) |char| switch (char) {
+                        '0'...'9' => return true,
+                        else => {},
+                    };
+                },
+                'w' => {
+                    for (input_line) |char| {
+                        if (std.ascii.isAlphanumeric(char) or char == '_') {
+                            return true;
+                        }
+                    }
+                },
+                else => {},
             }
             return false;
         }
