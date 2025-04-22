@@ -3,9 +3,19 @@ const std = @import("std");
 fn matchPattern(input_line: []const u8, pattern: []const u8) bool {
     if (pattern.len == 1) {
         return std.mem.indexOf(u8, input_line, pattern) != null;
-    } else {
-        @panic("Unhandled pattern");
     }
+    for (pattern, 0..) |symbol, index| {
+        if (symbol == '\\' and index + 1 < pattern.len and pattern[index + 1] == 'd') {
+            for (input_line) |char| {
+                switch (char) {
+                    '0'...'9' => return true,
+                    else => {},
+                }
+            }
+            return false;
+        }
+    }
+    return false;
 }
 
 pub fn main() !void {
@@ -28,8 +38,10 @@ pub fn main() !void {
     const input_len = try std.io.getStdIn().reader().read(&input_line);
     const input_slice = input_line[0..input_len];
     if (matchPattern(input_slice, pattern)) {
+        std.debug.print("ok", .{});
         std.process.exit(0);
     } else {
+        std.debug.print("err", .{});
         std.process.exit(1);
     }
 }
