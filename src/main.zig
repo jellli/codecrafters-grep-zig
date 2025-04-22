@@ -22,6 +22,29 @@ fn matchPattern(input_line: []const u8, pattern: []const u8) bool {
                 },
                 else => {},
             }
+        }
+        if (symbol == '[') {
+            const slice = pattern[index..];
+            var char_list: [1024]u8 = undefined;
+            var char_index: usize = 0;
+            var flag = false;
+            for (slice) |char| {
+                if (char == ']') {
+                    flag = true;
+                    break;
+                }
+                if (char_index < char_list.len) {
+                    char_list[char_index] = char;
+                    char_index += 1;
+                }
+            }
+            if (flag and char_list.len > 0) {
+                for (char_list) |char| {
+                    if (std.mem.containsAtLeastScalar(u8, input_line, 1, char)) {
+                        return true;
+                    }
+                }
+            }
             return false;
         }
     }
