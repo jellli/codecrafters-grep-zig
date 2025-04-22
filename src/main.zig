@@ -23,45 +23,31 @@ fn matchPattern(input_line: []const u8, pattern: []const u8) bool {
                 else => {},
             }
         }
-        if (symbol == '[') {
+        if (symbol == '[' and index + 1 < pattern.len) {
             var slice = pattern[index + 1 ..];
-            var char_list: [1024]u8 = undefined;
-            var char_index: usize = 0;
             var negative_flag = false;
-            var closed_flag = false;
             if (index + 1 < pattern.len and pattern[index + 1] == '^') {
                 negative_flag = true;
                 slice = pattern[index + 2 ..];
             }
-            for (slice) |char| {
-                if (char == ']') {
-                    closed_flag = true;
-                    break;
-                }
-                if (char_index < char_list.len) {
-                    char_list[char_index] = char;
-                    char_index += 1;
-                }
-            }
-            std.debug.print("char_list: {s}\n", .{char_list});
-            std.debug.print("negative_flag: {any}\n", .{negative_flag});
-            if (closed_flag and char_list.len > 0) {
-                const result = for (char_list[0..char_index]) |char| {
-                    std.debug.print("char: {c}\n", .{char});
-                    if (negative_flag) {
-                        if (!std.mem.containsAtLeastScalar(u8, input_line, 1, char)) {
-                            break true;
-                        }
-                    } else {
-                        if (std.mem.containsAtLeastScalar(u8, input_line, 1, char)) {
-                            break true;
-                        }
+            const closed_pos = std.mem.indexOfScalar(u8, slice, ']') orelse return false;
+            const char_slice = slice[0..closed_pos];
+            if (char_slice.len == 0) return false;
+
+            const result = for (char_slice) |char| {
+                std.debug.print("char: {c}\n", .{char});
+                if (negative_flag) {
+                    if (!std.mem.containsAtLeastScalar(u8, input_line, 1, char)) {
+                        break true;
                     }
-                } else false;
-                std.debug.print("result: {any}\n", .{result});
-                return result;
-            }
-            return false;
+                } else {
+                    if (std.mem.containsAtLeastScalar(u8, input_line, 1, char)) {
+                        break true;
+                    }
+                }
+            } else false;
+            std.debug.print("result: {any}\n", .{result});
+            return result;
         }
     }
     return false;
