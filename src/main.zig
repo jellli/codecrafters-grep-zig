@@ -5,6 +5,7 @@ const Token = struct {
     negative: bool = false,
     is_start_with: bool = false,
     is_end_with: bool = false,
+    is_one_or_more: bool = false,
     payload: ?[]const u8 = null,
 };
 const TokenEnum = enum {
@@ -93,6 +94,10 @@ fn tokenize(allocator: std.mem.Allocator, pattern: []const u8) !std.ArrayList(To
             tokens.items[tokens.items.len - 1].is_end_with = true;
             continue;
         }
+        if (symbol == '+') {
+            tokens.items[tokens.items.len - 1].is_one_or_more = true;
+            continue;
+        }
         try tokens.append(.{ .type = .char, .payload = pattern[index .. index + 1] });
     }
     return tokens;
@@ -126,6 +131,18 @@ fn matchPattern(input_line: []const u8, pattern: []const u8) !bool {
                     }
                     if (token.is_end_with and char_index != input_line.len - 1) {
                         break false;
+                    }
+                    if (token.is_one_or_more) {
+                        var stop_flag = false;
+                        if (token_index + 1 < tokens.items.len and token.payload.?[0] == current_char) {
+                            stop_flag = true;
+                        }
+                        while (char_index + 1 < input_line.len and input_line[char_index + 1] == current_char) {
+                            if (stop_flag and char_index + 2 < input_line.len and input_line[char_index + 2] != current_char) {
+                                break;
+                            }
+                            char_index += 1;
+                        }
                     }
                     token_index += 1;
                     continue;
