@@ -3,6 +3,7 @@ const std = @import("std");
 const Token = struct {
     type: TokenEnum,
     negative: bool = false,
+    is_start_with: bool = false,
     payload: ?[]const u8 = null,
 };
 const TokenEnum = enum {
@@ -19,6 +20,7 @@ fn tokenize(allocator: std.mem.Allocator, pattern: []const u8) !std.ArrayList(To
     var tokens = std.ArrayList(Token).init(allocator);
     var index: usize = 0;
     var symbol: u8 = undefined;
+    var has_start_with_symbol = false;
     while (index < pattern.len) : ({
         index += 1;
     }) {
@@ -66,6 +68,23 @@ fn tokenize(allocator: std.mem.Allocator, pattern: []const u8) !std.ArrayList(To
             index += char_slice.len + 1;
             continue;
         }
+        if (symbol == '^' and index + 1 < pattern.len) {
+            if (has_start_with_symbol) {
+                return TokenizeError.InvalidPattern;
+            }
+            if (std.ascii.isAlphabetic(pattern[index + 1])) {
+                try tokens.append(.{
+                    .type = .char,
+                    .payload = pattern[index + 1 .. index + 2],
+                    .is_start_with = true,
+                });
+                index += 1;
+                has_start_with_symbol = true;
+                continue;
+            } else {
+                return TokenizeError.InvalidPattern;
+            }
+        }
         try tokens.append(.{ .type = .char, .payload = pattern[index .. index + 1] });
     }
     return tokens;
@@ -94,6 +113,9 @@ fn matchPattern(input_line: []const u8, pattern: []const u8) !bool {
             .char => {
                 std.debug.print("\nc: {d},{d}\n", .{ current_char, token.payload.?[0] });
                 if (current_char == token.payload.?[0]) {
+                    if (token.is_start_with and char_index != 0) {
+                        break false;
+                    }
                     token_index += 1;
                     continue;
                 } else {
