@@ -1,56 +1,155 @@
 const std = @import("std");
 
-fn matchPattern(input_line: []const u8, pattern: []const u8) bool {
-    if (pattern.len == 1) {
-        return std.mem.indexOf(u8, input_line, pattern) != null;
-    }
-    for (pattern, 0..) |symbol, index| {
+const Token = struct {
+    type: TokenEnum,
+    negative: bool = false,
+    payload: ?[]const u8 = null,
+};
+const TokenEnum = enum {
+    digit,
+    alphanumeric,
+    word_group,
+    negative,
+    char,
+};
+const TokenizeError = error{
+    InvalidPattern,
+};
+fn tokenize(allocator: std.mem.Allocator, pattern: []const u8) !std.ArrayList(Token) {
+    var tokens = std.ArrayList(Token).init(allocator);
+    var index: usize = 0;
+    var symbol: u8 = undefined;
+    while (index < pattern.len) : ({
+        index += 1;
+    }) {
+        if (index < pattern.len) {
+            symbol = pattern[index];
+        }
+
         if (symbol == '\\' and index + 1 < pattern.len) {
-            switch (pattern[index + 1]) {
-                'd' => {
-                    for (input_line) |char| switch (char) {
-                        '0'...'9' => return true,
-                        else => {},
-                    };
-                },
-                'w' => {
-                    for (input_line) |char| {
-                        if (std.ascii.isAlphanumeric(char) or char == '_') {
-                            return true;
-                        }
-                    }
-                },
+            const e = pattern[index + 1];
+            switch (e) {
+                'd' => try tokens.append(.{
+                    .type = .digit,
+                }),
+                'w' => try tokens.append(.{
+                    .type = .alphanumeric,
+                }),
                 else => {},
             }
+
+            if (index + 1 < pattern.len) {
+                index += 1;
+            }
+            continue;
         }
         if (symbol == '[' and index + 1 < pattern.len) {
             var slice = pattern[index + 1 ..];
             var negative_flag = false;
             if (index + 1 < pattern.len and pattern[index + 1] == '^') {
                 negative_flag = true;
-                slice = pattern[index + 2 ..];
+                index += 1;
+                slice = pattern[index + 1 ..];
             }
-            const closed_pos = std.mem.indexOfScalar(u8, slice, ']') orelse return false;
+            const closed_pos = std.mem.indexOfScalar(u8, slice, ']') orelse return TokenizeError.InvalidPattern;
             const char_slice = slice[0..closed_pos];
-            if (char_slice.len == 0) return false;
-
-            const result = for (char_slice) |char| {
-                std.debug.print("char: {c}\n", .{char});
-                if (negative_flag) {
-                    if (!std.mem.containsAtLeastScalar(u8, input_line, 1, char)) {
-                        break true;
-                    }
-                } else {
-                    if (std.mem.containsAtLeastScalar(u8, input_line, 1, char)) {
-                        break true;
-                    }
-                }
-            } else false;
-            std.debug.print("result: {any}\n", .{result});
-            return result;
+            if (char_slice.len == 0) return TokenizeError.InvalidPattern;
+            var string = std.ArrayList(u8).init(allocator);
+            for (char_slice) |char| {
+                try string.append(char);
+            }
+            try tokens.append(.{
+                .type = .word_group,
+                .payload = string.items,
+                .negative = negative_flag,
+            });
+            index += char_slice.len + 1;
+            continue;
         }
+        try tokens.append(.{ .type = .char, .payload = pattern[index .. index + 1] });
     }
-    return false;
+    return tokens;
+}
+fn isDigit(char: u8) bool {
+    return char >= '0' and char <= '9';
+}
+fn matchPattern(input_line: []const u8, pattern: []const u8) !bool {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const tokens = try tokenize(allocator, pattern);
+    std.debug.print("\ntokens: {any}\n\n", .{tokens.items});
+    var char_index: usize = 0;
+    var token_index: usize = 0;
+    const matched = while (token_index < tokens.items.len) : (char_index += 1) {
+        if (char_index >= input_line.len) {
+            break false;
+        }
+        const token = tokens.items[token_index];
+        const current_char = input_line[char_index];
+
+        std.debug.print("\ni: {d},{d}\n", .{ token_index, char_index });
+        std.debug.print("c: {any},{c}\n", .{ token.type, current_char });
+        switch (token.type) {
+            .char => {
+                std.debug.print("\nc: {d},{d}\n", .{ current_char, token.payload.?[0] });
+                if (current_char == token.payload.?[0]) {
+                    token_index += 1;
+                    continue;
+                } else {
+                    if (token_index == 0 and token_index != tokens.items.len - 1) {
+                        continue;
+                    }
+                    break false;
+                }
+            },
+            .digit => {
+                if (isDigit(current_char)) {
+                    if (char_index + 1 < input_line.len) {
+                        token_index += 1;
+                    }
+                    continue;
+                } else {
+                    if (token_index == 0 and token_index != tokens.items.len - 1) {
+                        continue;
+                    }
+                    break false;
+                }
+            },
+            .alphanumeric => {
+                if (std.ascii.isAlphanumeric(current_char) or current_char == '_') {
+                    token_index += 1;
+                    continue;
+                } else {
+                    if (token_index == 0 and token_index != tokens.items.len - 1) {
+                        continue;
+                    }
+                    break false;
+                }
+            },
+            .word_group => {
+                const result = for (token.payload.?) |c| {
+                    const contains_char = std.mem.containsAtLeastScalar(u8, input_line, 1, c);
+                    if (token.negative and !contains_char) {
+                        break true;
+                    }
+                    if (!token.negative and contains_char) {
+                        break true;
+                    }
+                } else false;
+                if (result) {
+                    token_index += 1;
+                    continue;
+                }
+                if (token_index == 0 and token_index != tokens.items.len - 1) {
+                    continue;
+                }
+                break false;
+            },
+            else => break false,
+        }
+    } else true;
+    return matched;
 }
 
 pub fn main() !void {
@@ -72,11 +171,11 @@ pub fn main() !void {
     var input_line: [1024]u8 = undefined;
     const input_len = try std.io.getStdIn().reader().read(&input_line);
     const input_slice = input_line[0..input_len];
-    if (matchPattern(input_slice, pattern)) {
-        std.debug.print("ok", .{});
+    if (try matchPattern(input_slice, pattern)) {
+        std.debug.print("matched", .{});
         std.process.exit(0);
     } else {
-        std.debug.print("err", .{});
+        std.debug.print("not matched", .{});
         std.process.exit(1);
     }
 }
