@@ -6,6 +6,7 @@ const Token = struct {
     is_start_with: bool = false,
     is_end_with: bool = false,
     is_one_or_more: bool = false,
+    is_zero_or_one: bool = false,
     payload: ?[]const u8 = null,
 };
 const TokenEnum = enum {
@@ -98,6 +99,10 @@ fn tokenize(allocator: std.mem.Allocator, pattern: []const u8) !std.ArrayList(To
             tokens.items[tokens.items.len - 1].is_one_or_more = true;
             continue;
         }
+        if (symbol == '?') {
+            tokens.items[tokens.items.len - 1].is_zero_or_one = true;
+            continue;
+        }
         try tokens.append(.{ .type = .char, .payload = pattern[index .. index + 1] });
     }
     return tokens;
@@ -120,11 +125,15 @@ fn matchPattern(input_line: []const u8, pattern: []const u8) !bool {
         const token = tokens.items[token_index];
         const current_char = input_line[char_index];
 
-        std.debug.print("\ni: {d},{d}\n", .{ token_index, char_index });
-        std.debug.print("c: {any},{c}\n", .{ token.type, current_char });
+        std.debug.print("----------------------\ntoken_index: {d}\tchar_index: {d}\n", .{ token_index, char_index });
+        std.debug.print("\ntoken_type: {any}\tcurrent_char: {c}\n", .{ token.type, current_char });
         switch (token.type) {
             .char => {
-                std.debug.print("\nc: {d},{d}\n", .{ current_char, token.payload.?[0] });
+                std.debug.print("\ntoken_char: {c}\ttarget_char: {c}\tis_zero_or_one: {any}\n", .{
+                    token.payload.?[0],
+                    current_char,
+                    token.is_zero_or_one,
+                });
                 if (current_char == token.payload.?[0]) {
                     if (token.is_start_with and char_index != 0) {
                         break false;
@@ -147,6 +156,11 @@ fn matchPattern(input_line: []const u8, pattern: []const u8) !bool {
                     token_index += 1;
                     continue;
                 } else {
+                    if (token.is_zero_or_one) {
+                        token_index += 1;
+                        char_index -= 1;
+                        continue;
+                    }
                     if (token_index == 0 and token_index != tokens.items.len - 1) {
                         continue;
                     }
