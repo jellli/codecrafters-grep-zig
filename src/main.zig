@@ -5,10 +5,8 @@ fn isDigit(char: u8) bool {
     return char >= '0' and char <= '9';
 }
 
-const Pattern = union(enum) { Digit, Char: u8, AlphaNumeric, PositiveCharGroup: []const u8, NegativeCharGroup: []const u8, StartAnchor, EndAnchor, OneOrMore, ZeroOrOne, Any };
-const TokenizeError = error{
-    InvalidPattern,
-};
+const Pattern = union(enum) { Digit, Char: u8, AlphaNumeric, PositiveCharGroup: []const u8, NegativeCharGroup: []const u8, StartAnchor, EndAnchor, OneOrMore, ZeroOrOne, Any, AlternationWithGrouping: []Regex };
+const TokenizeError = error{ InvalidPattern, OutOfMemory };
 
 fn prevChar(text: []const u8, current_index: *usize) ?u8 {
     if (current_index.* - 1 < text.len) {
@@ -76,6 +74,22 @@ fn tokenize(allocator: std.mem.Allocator, pattern: []const u8) !std.ArrayList(Pa
                     pattern_index += char_slice.len + 1;
                 } else return TokenizeError.InvalidPattern;
             },
+            '(' => {
+                pattern_index += 1;
+                const closed_pos = std.mem.indexOfScalar(u8, pattern[pattern_index..], ')') orelse return TokenizeError.InvalidPattern;
+                if (std.mem.indexOfScalar(u8, pattern[pattern_index .. pattern_index + closed_pos], '|') != null) {
+                    var list = std.ArrayList(Regex).init(allocator);
+                    defer list.deinit();
+                    var iter = std.mem.splitScalar(u8, pattern[pattern_index .. pattern_index + closed_pos], '|');
+                    while (iter.next()) |p| {
+                        const reg = try Regex.init(allocator, p);
+                        try list.append(reg);
+                    }
+                    try patterns.append(.{ .AlternationWithGrouping = try allocator.dupe(Regex, list.items) });
+                    // std.debug.print("{any}\n", .{list.items});
+                    pattern_index = pattern_index + closed_pos;
+                }
+            },
             '^' => {
                 if (has_start_anchor) {
                     return TokenizeError.InvalidPattern;
@@ -119,7 +133,6 @@ fn tokenize(allocator: std.mem.Allocator, pattern: []const u8) !std.ArrayList(Pa
             },
         }
     }
-    // std.debug.print("{any}\n", .{patterns.items});
     return patterns;
 }
 
@@ -127,6 +140,8 @@ const MatchConfig = struct {
     text: []const u8,
     start_text_index: ?usize = 0,
     start_token_index: ?usize = 0,
+    matched_count: ?*usize = null,
+    match_from_start: bool = false,
 };
 
 const Regex = struct {
@@ -139,7 +154,7 @@ const Regex = struct {
     fn init(
         allocator: std.mem.Allocator,
         pattern: []const u8,
-    ) !@This() {
+    ) TokenizeError!@This() {
         return .{
             .allocator = allocator,
             .pattern = pattern,
@@ -192,6 +207,15 @@ const Regex = struct {
                 }
                 return false;
             },
+            .AlternationWithGrouping => |list| {
+                var matched_count: usize = 0;
+                return for (list) |item| {
+                    if (item.match(.{ .text = text, .matched_count = &matched_count, .match_from_start = true })) {
+                        text_index.* += matched_count;
+                        break true;
+                    }
+                } else false;
+            },
             else => return false,
         }
     }
@@ -203,9 +227,9 @@ const Regex = struct {
         const tokens = self.patterns.items;
 
         loop: while (token_index < tokens.len) {
-            const should_continue = token_index == 0 and token_index != tokens.len - 1;
+            const should_continue = !config.match_from_start and token_index == 0 and token_index != tokens.len - 1;
             const current_token = tokens[token_index];
-            // std.debug.print("{any},{d}\t{s},{d}\n", .{ current_token, token_index, text, text_index });
+            // std.debug.print("\n{any}\ntext: {s}\ntoken_index: {d}\ntext_index: {d}\n", .{ tokens, text, token_index, text_index });
             switch (current_token) {
                 .StartAnchor => {
                     if (text_index != 0) {
@@ -225,7 +249,7 @@ const Regex = struct {
                     if (text_index >= text.len) return false;
                     const char = text[text_index];
                     switch (current_token) {
-                        .Any, .Char, .Digit, .AlphaNumeric, .PositiveCharGroup, .NegativeCharGroup => {
+                        .Any, .Char, .Digit, .AlphaNumeric, .PositiveCharGroup, .NegativeCharGroup, .AlternationWithGrouping => {
                             if (!try matchToken(
                                 char,
                                 current_token,
@@ -312,9 +336,29 @@ const Regex = struct {
                 },
             }
         }
+
+        if (config.matched_count) |c| {
+            c.* = text_index - (config.start_text_index orelse 0);
+        }
         return true;
     }
 };
+
+test "regex alternation with grouping tokenize and match" {
+    const allocator = std.heap.page_allocator;
+    const pattern = "a (cat|dog) and (cat|dog)";
+    const pattern2 = "(apple|orange) juice";
+    const reg = try Regex.init(allocator, pattern);
+    const reg2 = try Regex.init(allocator, pattern2);
+
+    try testing.expect(reg.match(.{ .text = "a cat and cat" }) == true);
+    try testing.expect(reg.match(.{ .text = "a dog and dog" }) == true);
+    try testing.expect(reg.match(.{ .text = "a cat and dog" }) == true);
+    try testing.expect(reg.match(.{ .text = "a dog and cat" }) == true);
+
+    try testing.expect(reg2.match(.{ .text = "apple juice" }) == true);
+    try testing.expect(reg2.match(.{ .text = "orange juice" }) == true);
+}
 
 test "regex plain string one or more tokenize and match" {
     const allocator = std.heap.page_allocator;
