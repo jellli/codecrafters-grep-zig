@@ -5,17 +5,7 @@ fn isDigit(char: u8) bool {
     return char >= '0' and char <= '9';
 }
 
-const Pattern = union(enum) {
-    Digit,
-    Char: u8,
-    AlphaNumeric,
-    PositiveCharGroup: []const u8,
-    NegativeCharGroup: []const u8,
-    StartAnchor,
-    EndAnchor,
-    OneOrMore,
-    ZeroOrOne,
-};
+const Pattern = union(enum) { Digit, Char: u8, AlphaNumeric, PositiveCharGroup: []const u8, NegativeCharGroup: []const u8, StartAnchor, EndAnchor, OneOrMore, ZeroOrOne, Any };
 const TokenizeError = error{
     InvalidPattern,
 };
@@ -104,7 +94,7 @@ fn tokenize(allocator: std.mem.Allocator, pattern: []const u8) !std.ArrayList(Pa
                     switch (prev_token) {
                         .OneOrMore, .ZeroOrOne, .StartAnchor, .EndAnchor => return TokenizeError.InvalidPattern,
                         else => {
-                            try patterns.append(.OneOrMore);
+                            try patterns.insert(patterns.items.len - 1, .OneOrMore);
                         },
                     }
                 } else {
@@ -116,18 +106,20 @@ fn tokenize(allocator: std.mem.Allocator, pattern: []const u8) !std.ArrayList(Pa
                     switch (prev_token) {
                         .OneOrMore, .ZeroOrOne, .StartAnchor, .EndAnchor => return TokenizeError.InvalidPattern,
                         else => {
-                            try patterns.append(.ZeroOrOne);
+                            try patterns.insert(patterns.items.len - 1, .ZeroOrOne);
                         },
                     }
                 } else {
                     return TokenizeError.InvalidPattern;
                 }
             },
+            '.' => try patterns.append(.Any),
             else => {
                 try patterns.append(.{ .Char = char });
             },
         }
     }
+    // std.debug.print("{any}\n", .{patterns.items});
     return patterns;
 }
 
@@ -157,6 +149,10 @@ const Regex = struct {
 
     fn matchToken(char: u8, token: Pattern, text: []const u8, text_index: *usize) !bool {
         switch (token) {
+            .Any => {
+                text_index.* += 1;
+                return true;
+            },
             .Char => |c| {
                 if (char == c) {
                     text_index.* += 1;
@@ -229,7 +225,7 @@ const Regex = struct {
                     if (text_index >= text.len) return false;
                     const char = text[text_index];
                     switch (current_token) {
-                        .Char, .Digit, .AlphaNumeric, .PositiveCharGroup, .NegativeCharGroup => {
+                        .Any, .Char, .Digit, .AlphaNumeric, .PositiveCharGroup, .NegativeCharGroup => {
                             if (!try matchToken(
                                 char,
                                 current_token,
@@ -247,41 +243,70 @@ const Regex = struct {
                             continue;
                         },
                         .OneOrMore => {
-                            const prev_token = tokens[token_index - 1];
-                            var matched_chars: usize = 1;
-                            var temp_text_index = text_index;
+                            if (nextToken(tokens, &token_index)) |next_token| {
+                                var matched_chars: usize = 0;
+                                var temp_text_index = text_index;
 
-                            // Greedily match as many as possible
-                            while (temp_text_index < text.len) {
-                                if (!try matchToken(text[temp_text_index], prev_token, text[temp_text_index..], &temp_text_index)) {
-                                    break;
-                                }
-                                matched_chars += 1;
-                            }
-
-                            // Try to backtrack if needed
-                            while (matched_chars > 0) {
-                                const saved_text_index = text_index + matched_chars - 1;
-                                const saved_token_index = token_index + 1;
-
-                                if (self.match(.{
-                                    .text = text,
-                                    .start_text_index = saved_text_index,
-                                    .start_token_index = saved_token_index,
-                                })) {
-                                    text_index = saved_text_index;
-                                    token_index = saved_token_index;
-                                    continue :loop;
+                                // Greedily match as many as possible
+                                while (temp_text_index < text.len) {
+                                    if (!try matchToken(text[temp_text_index], next_token, text[temp_text_index..], &temp_text_index)) {
+                                        break;
+                                    }
+                                    matched_chars += 1;
                                 }
 
-                                matched_chars -= 1;
-                            }
+                                // Try to backtrack if needed
+                                while (matched_chars > 0) {
+                                    const saved_text_index = text_index + matched_chars;
+                                    const saved_token_index = token_index + 1;
 
-                            if (matched_chars == 0) {
-                                return false;
+                                    if (self.match(.{
+                                        .text = text,
+                                        .start_text_index = saved_text_index,
+                                        .start_token_index = saved_token_index,
+                                    })) {
+                                        text_index = saved_text_index;
+                                        token_index = saved_token_index;
+                                        continue :loop;
+                                    }
+
+                                    matched_chars -= 1;
+                                }
+
+                                if (matched_chars == 0) {
+                                    return false;
+                                }
                             }
                         },
-                        .ZeroOrOne => {},
+                        .ZeroOrOne => {
+                            if (nextToken(tokens, &token_index)) |next_token| {
+                                var matched_chars: isize = 0;
+                                var temp_text_index = text_index;
+
+                                while (matched_chars < 1) {
+                                    if (!try matchToken(text[temp_text_index], next_token, text[temp_text_index..], &temp_text_index)) {
+                                        break;
+                                    }
+                                    matched_chars += 1;
+                                }
+
+                                while (matched_chars >= 0) : (matched_chars -= 1) {
+                                    const i: usize = @intCast(matched_chars);
+                                    const saved_text_index = text_index + i;
+                                    const saved_token_index = token_index + 1;
+
+                                    if (self.match(.{
+                                        .text = text,
+                                        .start_text_index = saved_text_index,
+                                        .start_token_index = saved_token_index,
+                                    })) {
+                                        text_index = saved_text_index;
+                                        token_index = saved_token_index;
+                                        continue :loop;
+                                    }
+                                }
+                            }
+                        },
                         else => return false,
                     }
                 },
@@ -290,17 +315,6 @@ const Regex = struct {
         return true;
     }
 };
-
-test "regex plain string zero or one tokenize and match" {
-    const allocator = std.heap.page_allocator;
-    const pattern = "ca?at";
-    const reg = try Regex.init(allocator, pattern);
-
-    try testing.expect(reg.match(.{ .text = "caaat" }) == false);
-    try testing.expect(reg.match(.{ .text = "caat" }) == true);
-    try testing.expect(reg.match(.{ .text = "cat" }) == true);
-    try testing.expect(reg.match(.{ .text = "caaa" }) == false);
-}
 
 test "regex plain string one or more tokenize and match" {
     const allocator = std.heap.page_allocator;
@@ -311,6 +325,17 @@ test "regex plain string one or more tokenize and match" {
     try testing.expect(reg.match(.{ .text = "caat" }) == true); // Should match "ca" + "a" + "at"
     try testing.expect(reg.match(.{ .text = "cat" }) == false); // Missing 'a' before 't'
     try testing.expect(reg.match(.{ .text = "caaa" }) == false); // Missing 't'
+}
+
+test "regex plain string zero or one tokenize and match" {
+    const allocator = std.heap.page_allocator;
+    const pattern = "ca?at";
+    const reg = try Regex.init(allocator, pattern);
+
+    try testing.expect(reg.match(.{ .text = "caaat" }) == false);
+    try testing.expect(reg.match(.{ .text = "caat" }) == true);
+    try testing.expect(reg.match(.{ .text = "cat" }) == true);
+    try testing.expect(reg.match(.{ .text = "caaa" }) == false);
 }
 
 test "regex plain string tokenize and match" {
